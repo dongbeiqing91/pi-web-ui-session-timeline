@@ -32,7 +32,7 @@ These facts cost real debugging time — do not regress them:
 4. **Session jump is two-level** (see `jumpTo` in `client/entry.mjs`):
    - Fast path: `sessions.open(path)` — works when the target is in the **current** project's native list.
    - Cross-project: `openSession({ cwd, newChat: false })` (host's native project-open; triggers its directory-authorization dialog for unknown dirs) → poll `sessions.list()` (10 s budget) until the target path appears in the list → `sessions.open(path)` again.
-   - `sessions.list()` ids: running conversations use the conversation id (with `cwd` = that conversation's cwd); history entries use the **file path** as id.
+   - `sessions.list()` ids: running conversations use the conversation id (with `cwd` = that conversation's cwd); history entries use the **file path** as id. **Verified: the running conv id is a client-local id (e.g. `c2`), NOT the session UUID from the file header** — to correlate a running conversation with a timeline row, match on `cwd` + title (prefix-safe; timeline titles are truncated to 120 chars). Running entries also carry `isStreaming`.
 5. **Server-side `switchSession` accepts any path inside the sessions directory** (`isInsideSessionsDir`) — no project restriction. The 200-session-per-project cap lives in the *client list building* (running + history), which is why cross-project jumps must wait for the list to arrive.
 6. **Client bundle caching**: the host serves `client/*.mjs` with `Cache-Control: no-cache` and the service worker never caches `/plugins/*`. A plain page refresh picks up client changes. **Server changes need `pi-web-ui server restart`** (module stays in memory; the WS `plugins_reload` message is only triggered from the Settings UI).
 

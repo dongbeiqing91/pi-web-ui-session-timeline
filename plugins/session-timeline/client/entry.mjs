@@ -62,6 +62,17 @@ function relTime(ms) {
 	return now.getFullYear() === dt.getFullYear() ? `${mm}-${dd}` : `${dt.getFullYear()}-${mm}-${dd}`;
 }
 
+function titleMatches(a, b) {
+	if (!a || !b) return false;
+	if (a === b) return true;
+	// Running-conversation titles and file-parsed titles can differ in
+	// truncation (the timeline caps titles at 120 chars) — compare on a
+	// common prefix instead.
+	const ta = String(a).trim().slice(0, 80);
+	const tb = String(b).trim().slice(0, 80);
+	return ta.length >= 12 && (ta.startsWith(tb) || tb.startsWith(ta));
+}
+
 function waitFor(cond, timeoutMs, intervalMs = 150) {
 	return new Promise((resolve) => {
 		const started = Date.now();
@@ -218,6 +229,11 @@ const VIEW_CSS = `
 .st-title:disabled { opacity:.5; cursor:wait; }
 .st-meta { flex:none; font-size:11px; color:var(--text-dim,#888); white-space:nowrap; }
 .st-meta .st-cur { color:var(--accent,#5b9dff); }
+.st-dot { flex:none; align-self:center; width:8px; height:8px; border-radius:50%; background:var(--green,#22c55e); animation:st-breathe 1.8s ease-in-out infinite; }
+@keyframes st-breathe {
+	0%,100% { opacity:1; transform:scale(1); box-shadow:0 0 0 0 rgba(34,197,94,.4); }
+	50% { opacity:.45; transform:scale(.68); box-shadow:0 0 0 4px rgba(34,197,94,0); }
+}
 .st-status { flex:none; font-size:12px; color:var(--text-dim,#888); min-height:14px; display:none; }
 .st-status.err { color:var(--red,#e5534b); }
 .st-empty { padding:24px 8px; text-align:center; color:var(--text-dim,#888); font-size:12px; }
@@ -264,22 +280,38 @@ export default {
 		let loading = false;
 		let closed = false;
 
-		const openableIdsNow = () => {
+		const clientSessions = () => {
 			const b = bridge();
-			if (!b || typeof b.sessions?.list !== "function") return new Set();
+			if (!b || typeof b.sessions?.list !== "function") return [];
 			try {
-				return new Set(b.sessions.list().map((s) => s.id));
+				const l = b.sessions.list();
+				return Array.isArray(l) ? l : [];
 			} catch {
-				return new Set();
+				return [];
 			}
-		};
+			};
 
 		function renderList() {
 			list.innerHTML = "";
 			const q = filter.value.trim().toLowerCase();
 			// A session path that is in the client's own sessions.list() belongs to
 			// the current project (history ids are file paths) → opens directly.
-			const openableIds = openableIdsNow();
+			// Running conversations (kind:"running") carry a client-local conv id
+			// (not the session UUID), so "in progress" is matched by cwd+title.
+			const client = clientSessions();
+			const openableIds = new Set(client.map((s) => s.id));
+			const runningByCwd = new Map();
+			for (const s of client) {
+				if (s && s.kind === "running" && s.cwd && s.title) {
+					const arr = runningByCwd.get(s.cwd);
+					if (arr) arr.push(s.title);
+					runningByCwd.set(s.cwd, arr ?? [s.title]);
+				}
+			}
+			const isRunning = (it) => {
+				const titles = it.cwd ? runningByCwd.get(it.cwd) : undefined;
+				return !!titles && titles.some((t) => titleMatches(t, it.title));
+			};
 			let lastCwd = null;
 			let shown = 0;
 			for (const it of items) {
@@ -302,6 +334,12 @@ export default {
 				const row = document.createElement("div");
 				row.className = "st-row";
 				const isCurrent = openableIds.has(it.path);
+				if (isRunning(it)) {
+					const dot = document.createElement("span");
+					dot.className = "st-dot";
+					dot.title = "正在进行中";
+					row.appendChild(dot);
+				}
 				const titleBtn = document.createElement("button");
 				titleBtn.type = "button";
 				titleBtn.className = "st-title";

@@ -5,6 +5,7 @@ A [pi-web-ui](https://github.com/xing-shuyin/pi-web-ui) plugin: a **global, cros
 - The 🕘 button opens a modal listing your most recent sessions across **every** project (sorted by modification time, newest first).
 - Each row shows the session title, project, and relative time ("just now", "37 min ago", "2 days ago").
 - **Click a title to jump to that session.** Same-project sessions open directly; other projects switch the workspace first (through the host's native directory-authorization flow) and then open the session.
+- **Running sessions get a breathing green dot** — any session that is currently open in your client (the "running chats" of the left panel) is marked with a pulsing dot next to its title.
 
 ```
 ┌──────────────────────────────────────────────┐
@@ -81,6 +82,7 @@ Runs in the pi-web-ui host process; reads the session store with plain `node:fs`
 - DOM is built with `createElement`/`textContent`/`createTextNode` only — no unescaped `innerHTML` interpolation (pi-lens lint).
 - Jump flow (see Usage). The fast path tries `sessions.open(path)` first — for the *current* project this opens immediately. Only on failure (and when the row carries a `cwd`) does the cross-project `openSession` path run, polling `sessions.list()` for up to 10 s for the target to appear in the new project's list.
 - The "current · " badge marks sessions that are in the current project's native list (i.e. openable directly right now).
+- **Running-session dot**: `sessions.list()` entries with `kind:"running"` are the conversations open in *this* browser client. Their `id` is a client-local conv id (not the session UUID), so rows are matched by `cwd` + title (prefix-safe, since the timeline truncates titles at 120 chars). Matched rows get an 8 px green dot with a 1.8 s breathing animation (scale + opacity + fading glow).
 
 ## Files
 

@@ -5,7 +5,7 @@ A [pi-web-ui](https://github.com/xing-shuyin/pi-web-ui) plugin: a **global, cros
 - The 🕘 button opens a modal listing your most recent sessions across **every** project (sorted by modification time, newest first).
 - Each row shows the session title, project, and relative time ("just now", "37 min ago", "2 days ago").
 - **Click a title to jump to that session.** Same-project sessions open directly; other projects switch the workspace first (through the host's native directory-authorization flow) and then open the session.
-- **Running sessions get a breathing green dot** — any session that is currently open in your client (the "running chats" of the left panel) is marked with a pulsing dot next to its title.
+- **Running sessions get a breathing green dot** — but only when they are *actively in progress*: the conversation is streaming right now, or its session file was written to within the last 5 minutes. Conversations that are open in your client but parked (idle for a while) do **not** get the dot.
 
 ```
 ┌──────────────────────────────────────────────┐
@@ -73,7 +73,7 @@ Runs in the pi-web-ui host process; reads the session store with plain `node:fs`
 - **Two-pass scan**: pass 1 stats every `.jsonl` (mtime desc, keep top `limit`); pass 2 parses only those headers.
 - **Title parse** — one sequential pass over the whole file (the same "last rename wins" semantics as the host's own full-file parse; a head+tail window is *not* enough, because active sessions append far more than any fixed tail budget after their last rename). Lines are prefiltered by substring before `JSON.parse`, so a multi-MB file costs ~one read (10–30 ms). Extracted: header (line 1) → `id`/`cwd`, first `user` message → title fallback, last `session_info` → latest name.
 - **Caching**: in-memory scan cache (10 s TTL; the list refreshes on its own) + per-file mtime/size header cache (up to 1024 entries; old sessions are immutable, so steady-state scans cost only `stat`s).
-- HTTP: `GET /plugins-api/session-timeline/list?refresh=1` → `{ok, count, limit, ms, sessions[]}`. `ms` is the scan duration for display.
+- HTTP: `GET /plugins-api/session-timeline/list?refresh=1` → `{ok, count, limit, ms, sessions[]}`. `?refresh=1` (used by the ↻ button) bypasses the 10 s scan cache; `ms` is the scan duration for display.
 
 ### Client (`plugins/session-timeline/client/entry.mjs`)
 
@@ -82,7 +82,7 @@ Runs in the pi-web-ui host process; reads the session store with plain `node:fs`
 - DOM is built with `createElement`/`textContent`/`createTextNode` only — no unescaped `innerHTML` interpolation (pi-lens lint).
 - Jump flow (see Usage). The fast path tries `sessions.open(path)` first — for the *current* project this opens immediately. Only on failure (and when the row carries a `cwd`) does the cross-project `openSession` path run, polling `sessions.list()` for up to 10 s for the target to appear in the new project's list.
 - The "current · " badge marks sessions that are in the current project's native list (i.e. openable directly right now).
-- **Running-session dot**: `sessions.list()` entries with `kind:"running"` are the conversations open in *this* browser client. Their `id` is a client-local conv id (not the session UUID), so rows are matched by `cwd` + title (prefix-safe, since the timeline truncates titles at 120 chars). Matched rows get an 8 px green dot with a 1.8 s breathing animation (scale + opacity + fading glow).
+- **Running-session dot**: `sessions.list()` entries with `kind:"running"` are the conversations open in *this* browser client — note this includes **parked** conversations (opened, then idle for hours; pi-web-ui keeps them in the list until closed). Their `id` is a client-local conv id (not the session UUID), so rows are matched by `cwd` + title (prefix-safe, since the timeline truncates titles at 120 chars). The dot only renders when the match is also *active*: `isStreaming === true` or the row's file mtime is within the last 5 minutes (`ACTIVE_WINDOW_MS`). Matched rows get an 8 px green dot with a 1.8 s breathing animation (scale + opacity + fading glow).
 
 ## Files
 

@@ -236,9 +236,10 @@ export default {
 					const s = host.getSettings?.() ?? {};
 					limit = clampLimit(s.limit);
 				}
+				const force = q.refresh === "1" || q.refresh === "true";
 				const key = String(limit);
 				const now = Date.now();
-				if (!cache.sessions || cache.key !== key || now - cache.at > CACHE_TTL_MS) {
+				if (force || !cache.sessions || cache.key !== key || now - cache.at > CACHE_TTL_MS) {
 					cache = { key, at: now, sessions: scanAll(limit) };
 				}
 				res.json({ ok: true, count: cache.sessions.length, sessions: cache.sessions });

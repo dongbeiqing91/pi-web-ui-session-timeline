@@ -19,6 +19,12 @@
  */
 
 const RUNTIME_KEY = "__piSessionTimelineRuntime";
+
+/** A "running" conversation in the client's list stays there after it is
+ *  opened — even when the agent has been idle for hours. So the green
+ *  "in progress" dot requires real activity: the conversation is streaming
+ *  right now, or its session file was written to within this window. */
+const ACTIVE_WINDOW_MS = 5 * 60_000;
 const previous = globalThis[RUNTIME_KEY];
 if (previous?.destroy) {
 	try {
@@ -289,7 +295,7 @@ export default {
 			} catch {
 				return [];
 			}
-			};
+		};
 
 		function renderList() {
 			list.innerHTML = "";
@@ -300,18 +306,19 @@ export default {
 			// (not the session UUID), so "in progress" is matched by cwd+title.
 			const client = clientSessions();
 			const openableIds = new Set(client.map((s) => s.id));
-			const runningByCwd = new Map();
-			for (const s of client) {
-				if (s && s.kind === "running" && s.cwd && s.title) {
-					const arr = runningByCwd.get(s.cwd);
-					if (arr) arr.push(s.title);
-					runningByCwd.set(s.cwd, arr ?? [s.title]);
-				}
-			}
-			const isRunning = (it) => {
-				const titles = it.cwd ? runningByCwd.get(it.cwd) : undefined;
-				return !!titles && titles.some((t) => titleMatches(t, it.title));
-			};
+			const running = client.filter((s) => s && s.kind === "running" && s.cwd && s.title);
+			// In-progress = a running conversation for this row that is either
+			// streaming right now or whose session file was written to recently
+			// (idle running conversations — open but parked for hours — do not
+			// get the dot).
+			const nowMs = Date.now();
+			const isRunning = (it) =>
+				running.some(
+					(s) =>
+						s.cwd === it.cwd &&
+						titleMatches(s.title, it.title) &&
+						(s.isStreaming === true || nowMs - it.mtime <= ACTIVE_WINDOW_MS),
+				);
 			let lastCwd = null;
 			let shown = 0;
 			for (const it of items) {
@@ -337,7 +344,7 @@ export default {
 				if (isRunning(it)) {
 					const dot = document.createElement("span");
 					dot.className = "st-dot";
-					dot.title = "正在进行中";
+					dot.title = "正在进行中（正在生成，或 5 分钟内有活动）";
 					row.appendChild(dot);
 				}
 				const titleBtn = document.createElement("button");
@@ -380,13 +387,14 @@ export default {
 			count.textContent = items.length ? `${shown} / ${items.length} 条会话 · 按修改时间由新到旧` : "";
 		}
 
-		async function load() {
+		async function load(force) {
 			if (loading) return;
 			loading = true;
 			refreshBtn.disabled = true;
 			setStatus(status, "扫描会话文件中…");
 			try {
-				const r = await fetch(`${API_BASE}/list`, { credentials: "same-origin" });
+				const url = `${API_BASE}/list${force ? "?refresh=1" : ""}`;
+				const r = await fetch(url, { credentials: "same-origin" });
 				const data = await r.json().catch(() => null);
 				if (!r.ok || !data || data.ok !== true) throw new Error((data && data.error) || `HTTP ${r.status}`);
 				items = Array.isArray(data.sessions) ? data.sessions : [];
@@ -403,7 +411,7 @@ export default {
 			}
 		}
 
-		refreshBtn.addEventListener("click", load);
+		refreshBtn.addEventListener("click", () => load(true));
 		filter.addEventListener("input", renderList);
 		void load();
 	},

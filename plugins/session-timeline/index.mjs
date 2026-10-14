@@ -1,29 +1,33 @@
 /**
- * session-timeline — server side.
+ * session-timeline — pi-web-ui plugin (server side).
  *
- * Global (cross-project) session timeline:
- *   1. walk <agentDir>/sessions/--<cwd>--/*.jsonl for every project
- *   2. stat all files, sort by mtime desc (newest first)
- *   3. parse the head of the top-N files (header cwd/id, session_info name,
- *      first user message) — mirrors the host's own parsing
- *      (server/session-parser.ts) in a lightweight read-only form
- *   4. serve GET /list (10s cache)
+ * Global, cross-project session timeline: scans the pi session store
+ * (~/.pi/agent/sessions), sorts sessions by file mtime (newest first),
+ * and serves the top N to the client over a plugin HTTP route.
  *
- * agentDir resolution mirrors the pi SDK getAgentDir():
- *   PI_CODING_AGENT_DIR env (tilde-expanded) else ~/.pi/agent.
+ * The native pi-web-ui left panel only lists the *current* project's
+ * sessions; this plugin covers every project at once.
  *
- * Note: the plugin runs inside the host server process, so raw node:fs is
- * available (same precedent as the official session-migrate plugin). The
- * manifest still declares "fs" to make the intent explicit.
+ * The plugin runs in the pi-web-ui host process and reads the session
+ * store directly with node:fs (same precedent as the official
+ * session-migrate plugin) — no per-call fs authorization prompts.
+ *
+ * Session file layout (JSONL, one record per line):
+ *   line 1: {"type":"session","version":3,"id":"<uuid>","timestamp":"...","cwd":"/abs/path"}
+ *   ...
+ *   {"type":"session_info","name":"..."}   (rename; the LAST one wins — it
+ *                                           can sit megabytes into the file)
+ *   {"type":"message","message":{"role":"user","content": string|[{type:"text",text}]}}
+ *
+ * Title precedence (same "last rename wins" semantics as the host):
+ *   latest session_info name  →  first user message  →  filename stem
  */
 import { openSync, readdirSync, readSync, closeSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 
-const READ_CAP_BYTES = 512 * 1024; // per-file head search budget (system prompts can be 100KB+)
-const TAIL_BYTES = 256 * 1024; // tail window for the latest rename
-const LINE_CAP_BYTES = 1024 * 1024; // one line longer than this is skipped
-const MAX_LINES = 300;
+const CHUNK_BYTES = 256 * 1024; // sequential read chunk
+const CARRY_CAP_BYTES = 2 * 1024 * 1024; // a single line longer than this is dropped
 const FILE_CACHE_MAX = 1024;
 const CACHE_TTL_MS = 10_000;
 const LIMIT_MIN = 20;
@@ -42,177 +46,124 @@ const AGENT_DIR = process.env.PI_CODING_AGENT_DIR
 	: join(homedir(), ".pi", "agent");
 const SESSIONS_ROOT = join(AGENT_DIR, "sessions");
 
-/**
- * Read up to MAX_LINES lines from the first READ_CAP_BYTES of the file,
- * byte-accurate (multibyte chars never split across chunks). Lines longer
- * than LINE_CAP_BYTES are skipped. The session header (line 1) is always
- * small; the first user message normally follows the (possibly huge)
- * system message.
- */
-function readHeadLines(filePath) {
-	const lines = [];
-	let fd = null;
-	try {
-		fd = openSync(filePath, "r");
-		let pos = 0;
-		const chunk = Buffer.alloc(64 * 1024);
-		let carry = Buffer.alloc(0);
-		while (pos < READ_CAP_BYTES && lines.length < MAX_LINES) {
-			const n = readSync(fd, chunk, 0, Math.min(chunk.length, READ_CAP_BYTES - pos), pos);
-			if (n <= 0) break;
-			pos += n;
-			const data = carry.length > 0 ? Buffer.concat([carry, chunk.subarray(0, n)]) : chunk.subarray(0, n);
-			carry = Buffer.alloc(0);
-			let start = 0;
-			while (start < data.length) {
-				const nl = data.indexOf(0x0a, start); // "\n"
-				if (nl < 0) break;
-				const lineBuf = data.subarray(start, nl);
-				start = nl + 1;
-				if (lineBuf.length > LINE_CAP_BYTES) continue; // oversized line — skip
-				const line = lineBuf.toString("utf8");
-				if (line.trim()) lines.push(line);
-				if (lines.length >= MAX_LINES) break;
-			}
-			if (lines.length < MAX_LINES && start < data.length) carry = Buffer.from(data.subarray(start));
-		}
-	} catch {
-		/* unreadable file — treat as empty */
-	} finally {
-		if (fd !== null) {
-			try {
-				closeSync(fd);
-			} catch {
-				/* already closed */
-			}
-		}
-	}
-	return lines;
-}
-
-/** user message content: string | [{text}] (same shape as the host parser). */
+/** Flatten a message's content (string | array of parts) to plain text. */
 function userMessageText(msg) {
-	if (!msg) return "";
-	if (typeof msg.content === "string") return msg.content;
-	if (Array.isArray(msg.content)) {
-		return msg.content
-			.map((p) => (p && typeof p.text === "string" ? p.text : ""))
-			.filter(Boolean)
+	const c = msg?.content;
+	if (typeof c === "string") return c;
+	if (Array.isArray(c)) {
+		return c
+			.filter((p) => p && (p.type === "text" || typeof p.text === "string"))
+			.map((p) => p.text)
 			.join(" ");
 	}
 	return "";
 }
 
 /**
- * Extract { id, cwd, name, firstMessage } from head lines.
+ * Single-pass full-file scan.
+ *
+ * Tracks, in one sequential read:
+ *   - the session header (line 1) → id + cwd
+ *   - the first user message → title fallback
+ *   - the LAST session_info with a name → latest rename (last wins,
+ *     exactly the host's semantics — a head+tail window is NOT enough,
+ *     because active sessions keep appending far more than any fixed
+ *     tail budget after their last rename)
+ *
+ * Lines are prefiltered by substring before JSON.parse, so per-line
+ * cost is a cheap `includes` for the ~99% of records that matter not.
+ * Cost is one read of the file (~10-30 ms for multi-MB files on SSD).
  */
-function extractHead(lines) {
+function parseSessionFile(filePath) {
 	let id = "";
 	let cwd = "";
 	let name = "";
 	let firstMessage = "";
-	for (const line of lines) {
+	let foundFirstUser = false;
+	let carry = "";
+
+	const processLine = (line) => {
+		if (!line) return;
+		const relevant = line.includes('"session') || (!foundFirstUser && line.includes('"role":"user"'));
+		if (!relevant) return;
 		let rec;
 		try {
 			rec = JSON.parse(line);
 		} catch {
-			continue;
+			return;
 		}
-		if (!rec || typeof rec !== "object") continue;
+		if (!rec || typeof rec !== "object") return;
 		if (rec.type === "session") {
-			id = typeof rec.id === "string" ? rec.id : "";
-			cwd = typeof rec.cwd === "string" ? rec.cwd : "";
+			if (!id) {
+				id = typeof rec.id === "string" ? rec.id : "";
+				cwd = typeof rec.cwd === "string" ? rec.cwd : "";
+			}
 		} else if (rec.type === "session_info") {
 			if (typeof rec.name === "string" && rec.name.trim()) name = rec.name.trim();
-		} else if (rec.type === "message" && !firstMessage) {
-			if (rec.message && rec.message.role === "user") {
-				const text = userMessageText(rec.message).replace(/\s+/g, " ").trim();
-				if (text) firstMessage = text.slice(0, TITLE_MAX);
+		} else if (!foundFirstUser && rec.type === "message" && rec.message && rec.message.role === "user") {
+			const text = userMessageText(rec.message).replace(/\s+/g, " ").trim();
+			if (text) firstMessage = text.slice(0, TITLE_MAX);
+			foundFirstUser = true;
+		}
+	};
+
+	const fd = openSync(filePath, "r");
+	const chunk = Buffer.alloc(CHUNK_BYTES);
+	try {
+		for (;;) {
+			const n = readSync(fd, chunk, 0, chunk.length);
+			if (n <= 0) break;
+			const data = carry + chunk.subarray(0, n).toString("utf8");
+			const lastNl = data.lastIndexOf("\n");
+			if (lastNl < 0) {
+				carry = data.length > CARRY_CAP_BYTES ? "" : data; // oversized single line — drop
+				continue;
+			}
+			carry = data.slice(lastNl + 1);
+			const body = data.slice(0, lastNl);
+			const nl = body.indexOf("\n");
+			if (nl < 0) {
+				processLine(body);
+			} else {
+				let start = 0;
+				while (start < body.length) {
+					const i = body.indexOf("\n", start);
+					if (i < 0) {
+						processLine(body.slice(start));
+						break;
+					}
+					processLine(body.slice(start, i));
+					start = i + 1;
+				}
 			}
 		}
-		if (name && firstMessage && cwd) break; // everything we need is in
+		if (carry) processLine(carry);
+	} finally {
+		closeSync(fd);
 	}
 	return { id, cwd, name, firstMessage };
 }
 
-function parseSessionHead(filePath, size) {
-	const head = extractHead(readHeadLines(filePath));
-	// Long-running sessions get renamed late: the latest session_info can sit
-	// far beyond the head window. Scan a tail window for it; last name wins
-	// (same semantics as the host's full-file parse).
-	const tailName = readTailName(filePath, size);
-	if (tailName) head.name = tailName;
-	return head;
-}
+/** Persistent parse cache: path -> { mtime, size, parsed }. Old sessions
+ *  are immutable (pi appends only to the active one), so repeated scans
+ *  only re-read files that actually changed. */
+const fileCache = new Map();
 
-/**
- * Find the latest rename (last `session_info` with a name) in the last
- * TAIL_BYTES of the file. Returns null when not found (or when the head
- * window already covered the whole file).
- */
-function readTailName(filePath, size) {
-	if (!size || size <= READ_CAP_BYTES) return null;
-	const from = size - TAIL_BYTES;
-	let buf = null;
-	let fd = null;
-	try {
-		fd = openSync(filePath, "r");
-		const full = Buffer.alloc(TAIL_BYTES);
-		const n = readSync(fd, full, 0, full.length, from);
-		buf = full.subarray(0, n);
-	} catch {
-		return null;
-	} finally {
-		if (fd !== null) {
-			try {
-				closeSync(fd);
-			} catch {
-				/* already closed */
-			}
-		}
+function parseSessionCached(filePath, mtime, size) {
+	const hit = fileCache.get(filePath);
+	if (hit && hit.mtime === mtime && hit.size === size) return hit.parsed;
+	const parsed = parseSessionFile(filePath);
+	fileCache.set(filePath, { mtime, size, parsed });
+	if (fileCache.size > FILE_CACHE_MAX) {
+		fileCache.delete(fileCache.keys().next().value);
 	}
-	const firstNl = buf.indexOf(0x0a); // drop the (possibly partial) first line
-	if (firstNl < 0) return null; // whole window is one line — skip
-	let start = firstNl + 1;
-	let name = null;
-	while (start < buf.length) {
-		const nl = buf.indexOf(0x0a, start);
-		if (nl < 0) break;
-		const lineBuf = buf.subarray(start, nl);
-		start = nl + 1;
-		if (!lineBuf.includes("session_info")) continue;
-		let rec;
-		try {
-			rec = JSON.parse(lineBuf.toString("utf8"));
-		} catch {
-			continue;
-		}
-		if (rec && rec.type === "session_info" && typeof rec.name === "string" && rec.name.trim()) {
-			name = rec.name.trim();
-		}
-	}
-	return name;
-}
-
-/** Persistent head cache: path -> { mtime, size, head }. Old sessions are
- *  immutable, so repeated scans only re-parse files that changed. */
-const fileHeadCache = new Map();
-
-function parseSessionHeadCached(filePath, mtime, size) {
-	const hit = fileHeadCache.get(filePath);
-	if (hit && hit.mtime === mtime && hit.size === size) return hit.head;
-	const head = parseSessionHead(filePath, size);
-	fileHeadCache.set(filePath, { mtime, size, head });
-	if (fileHeadCache.size > FILE_CACHE_MAX) {
-		fileHeadCache.delete(fileHeadCache.keys().next().value);
-	}
-	return head;
+	return parsed;
 }
 
 /**
  * Scan every project dir under SESSIONS_ROOT.
  * Pass 1: stat all .jsonl files → sort by mtime desc → keep top `limit`.
- * Pass 2: parse headers only for those (keeps the scan cheap).
+ * Pass 2: single-pass parse only those (with mtime/size caching).
  */
 function scanAll(limit) {
 	const candidates = [];
@@ -243,15 +194,15 @@ function scanAll(limit) {
 	}
 	candidates.sort((a, b) => b.mtime - a.mtime);
 	return candidates.slice(0, limit).map((c) => {
-		const head = parseSessionHeadCached(c.path, c.mtime, c.size);
+		const parsed = parseSessionCached(c.path, c.mtime, c.size);
 		const stem = basename(c.path).replace(/\.jsonl$/i, "");
 		return {
 			path: c.path,
 			mtime: Math.floor(c.mtime),
-			id: head.id,
-			cwd: head.cwd,
-			cwdName: head.cwd ? basename(head.cwd) || head.cwd : "",
-			title: head.name || head.firstMessage || stem,
+			id: parsed.id,
+			cwd: parsed.cwd,
+			cwdName: parsed.cwd ? basename(parsed.cwd) || parsed.cwd : "",
+			title: parsed.name || parsed.firstMessage || stem,
 		};
 	});
 }
@@ -299,4 +250,4 @@ export default {
 };
 
 // Named exports for standalone unit tests (the host loads the default export).
-export { SESSIONS_ROOT, parseSessionHead, scanAll };
+export { SESSIONS_ROOT, parseSessionFile, scanAll };

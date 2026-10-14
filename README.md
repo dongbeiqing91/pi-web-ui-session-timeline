@@ -70,8 +70,7 @@ Runs in the pi-web-ui host process; reads the session store with plain `node:fs`
 
 - Session store: `~/.pi/agent/sessions/--<cwd with non-alphanumerics → ->--/*.jsonl` (one directory per project). Agent dir resolution mirrors the SDK: `$PI_CODING_AGENT_DIR` (with `~` expansion), else `~/.pi/agent`.
 - **Two-pass scan**: pass 1 stats every `.jsonl` (mtime desc, keep top `limit`); pass 2 parses only those headers.
-- **Header parse** (first 512 KB / up to 300 lines, byte-exact newline splitting): line 1 is `{"type":"session","id","cwd","timestamp"}`; first `session_info` name; first `user` message (title fallback). A 512 KB head is needed because system prompts before the first user message can exceed 100 KB.
-- **Tail scan** (last 256 KB): the *latest* rename wins and can sit far beyond the head window in long sessions — so the tail window is scanned for the last `session_info` with a `name`, same "last name wins" semantics as the host's own full-file parse.
+- **Title parse** — one sequential pass over the whole file (the same "last rename wins" semantics as the host's own full-file parse; a head+tail window is *not* enough, because active sessions append far more than any fixed tail budget after their last rename). Lines are prefiltered by substring before `JSON.parse`, so a multi-MB file costs ~one read (10–30 ms). Extracted: header (line 1) → `id`/`cwd`, first `user` message → title fallback, last `session_info` → latest name.
 - **Caching**: in-memory scan cache (10 s TTL; the list refreshes on its own) + per-file mtime/size header cache (up to 1024 entries; old sessions are immutable, so steady-state scans cost only `stat`s).
 - HTTP: `GET /plugins-api/session-timeline/list?refresh=1` → `{ok, count, limit, ms, sessions[]}`. `ms` is the scan duration for display.
 
@@ -99,7 +98,7 @@ AGENTS.md                  # agent contribution guide
 
 - **Jumping to another project switches your workspace** — that is the host's native session-open semantics (same as clicking a project). The old conversation is not lost (it stays in running chats / history).
 - The host caps each project's native history list at 200 sessions (by message count). Sessions beyond that cap cannot be opened through the bridge and are reported as such.
-- Titles are parsed from file head+tail only. A session renamed in the *middle* of a very long file may show an older name (rare: the last rename is normally near the tail).
+- Titles are parsed with the host's exact "last rename wins" semantics (full-file scan), so they match the native left panel. (Cost: one sequential read per file, ~10–30 ms for multi-MB files, cached by mtime+size.)
 - mtime ordering reflects file modification time (pi updates the file on activity), not message timestamps.
 
 ## Development
@@ -111,7 +110,7 @@ node -e "import('./plugins/session-timeline/index.mjs').then(async m => {
 })"
 ```
 
-- `index.mjs` exports `scanAll`, `parseSessionHead`, `SESSIONS_ROOT` for direct testing.
+- `index.mjs` exports `scanAll`, `parseSessionFile`, `SESSIONS_ROOT` for direct testing.
 - Client changes need only a browser refresh; **server (`index.mjs`) changes require a `pi-web-ui server restart`** (the host keeps the loaded module in memory; `plugins_reload` is only reachable from the Settings UI).
 - Browser test loop: `agent-browser open http://127.0.0.1:8787`, then `snapshot -i` → `click @ref` (or `eval` for deterministic clicks). The test tab is a separate client — jumping there does not disturb other open conversations.
 

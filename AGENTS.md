@@ -40,8 +40,7 @@ These facts cost real debugging time — do not regress them:
 
 - One directory per project: `--<cwd with every non-alphanumeric char → ->--/` (e.g. `--Users-bedong-managedci--`). **Do not reverse-map dir names back to cwds** (`-` substitution is ambiguous) — read `cwd` from the file header instead.
 - Files are JSONL; first line: `{"type":"session","version":3,"id":"<uuid>","timestamp":"...","cwd":"/abs/path"}`.
-- Renames: `{"type":"session_info","name":"..."}` — **the LAST such record wins**, and in long sessions it can be megabytes into the file. That is why `index.mjs` does a 256 KB **tail scan** for the latest name in addition to the head parse (a head-only parse shows stale titles — this was a real bug).
-- Before the first user message there can be a **system prompt >100 KB** in a single JSON line. Head parse budget is 512 KB / 300 lines with byte-exact newline splitting (`Buffer.indexOf(0x0a)`); lines >1 MB are skipped.
+- Renames: `{"type":"session_info","name":"..."}` — **the LAST such record wins**, and in long sessions it can be megabytes into the file, with MORE than any fixed tail window appended after it (active sessions keep growing). Head+tail windows both failed in practice (stale titles) — `index.mjs` therefore does a **single sequential full-file pass** per candidate (substring-prefiltered before `JSON.parse`), exactly matching the host's semantics. Total store is small (tens of MB) and results are cached by mtime+size, so the cost is one cold read of the top-N files.
 - Non-session files to ignore: `.touches.json`, `.lease`, anything not `*.jsonl`.
 - `firstMessage` = first `user` message (`message.content` is a string or an array of `{type:"text",text}` parts); it is the title fallback when no rename exists.
 
@@ -60,7 +59,7 @@ These facts cost real debugging time — do not regress them:
    ```bash
    node -e "import('/Users/bedong/Workspaces/pi-web-ui-session-timeline/plugins/session-timeline/index.mjs').then(m => { const r = m.scanAll(10); console.log(r.length, r[0]?.title, r[0]?.cwd); })"
    ```
-   `scanAll`, `parseSessionHead`, `SESSIONS_ROOT` are exported for this.
+   `scanAll`, `parseSessionFile`, `SESSIONS_ROOT` are exported for this.
 3. `./install.sh` → copies into `~/.pi-web/plugins/session-timeline` (diffs are overwritten; client files are replaced).
 4. Server change? → `pi-web-ui server restart`. Client-only change? → refresh the browser tab.
 5. Browser E2E with `agent-browser` (the test tab is a separate client, so it doesn't disturb the user's open conversations):

@@ -352,17 +352,36 @@ export default {
 
 		let items = [];
 		let loading = false;
+		let haveData = false;
 		let closed = false;
 		let refreshBtn = null;
 		let filter = null;
 		let count = null;
 		let list = null;
 		let secList = null;
+		let secCountEl = null;
 
 		if (isSection) {
 			secList = document.createElement("div");
 			secList.className = "st-sec-list";
 			root.append(secList, status);
+			// The host's plugin section header has no count channel (native
+			// sections render `label (n)`; plugin sections only `label`).
+			// Append our own count span to the title text — React manages the
+			// text nodes only, so the extra span survives header re-renders
+		// (collapse toggles); a full panel remount re-runs mount(). Collapse
+		// unmounts the body (→ re-mount on expand), so strip a leftover span
+		// first to avoid doubling.
+			const secWrap = container.closest(".lp-section-plugin");
+			const titleSpan = secWrap?.querySelector(".lp-section-title-text");
+			if (titleSpan) {
+				titleSpan.querySelector(".st-sec-count")?.remove();
+				const sp = document.createElement("span");
+				sp.className = "st-sec-count";
+				sp.textContent = "";
+				titleSpan.appendChild(sp);
+				secCountEl = sp;
+			}
 		} else {
 			// modal surface: meta row + filter + scrolling list (original design)
 			const top = document.createElement("div");
@@ -544,6 +563,7 @@ export default {
 			secList.innerHTML = "";
 			const { isRunning } = runningInfo();
 			const openId = openSessionId();
+			if (secCountEl && haveData) secCountEl.textContent = ` (${items.length})`;
 			// Flat card list, newest first (no project grouping).
 			for (const it of items) secList.appendChild(makeCard(it, { isRunning, openId }));
 			if (!items.length) {
@@ -567,6 +587,7 @@ export default {
 				const data = await r.json().catch(() => null);
 				if (!r.ok || !data || data.ok !== true) throw new Error((data && data.error) || `HTTP ${r.status}`);
 				items = Array.isArray(data.sessions) ? data.sessions : [];
+				haveData = true;
 				render();
 				setStatus(status, items.length ? "" : "会话目录为空");
 			} catch (e) {

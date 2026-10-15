@@ -245,7 +245,7 @@ if (!registerAction()) {
 /* the modal view                                                      */
 /* ------------------------------------------------------------------ */
 const VIEW_CSS = `
-.st-view { display:flex; flex-direction:column; gap:10px; height:100%; min-height:200px; font-size:13px; }
+.st-view { display:flex; flex-direction:column; gap:10px; height:100%; min-height:200px; font-size:13px; padding:2px 12px 6px; }
 .st-top { display:flex; align-items:center; gap:8px; flex:none; }
 .st-top .st-count { color:var(--text-dim,#888); font-size:12px; flex:1; }
 .st-refresh { flex:none; }

@@ -279,12 +279,16 @@ const VIEW_CSS = `
 .st-view.st-sec { gap:0; height:auto; min-height:0; overflow:visible; }
 .st-top { display:flex; align-items:center; gap:8px; flex:none; }
 .st-top .st-count { color:var(--text-dim,#888); font-size:12px; flex:1; }
-.st-refresh { flex:none; }
+.st-refresh { flex:none; display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; padding:0; border:none; border-radius:6px; background:transparent; color:var(--text-faint,#999); cursor:pointer; }
+.st-refresh:hover:not(:disabled) { color:var(--text,#e6e8ef); background:var(--bg-elev2,rgba(127,127,127,.15)); }
+.st-refresh:disabled { opacity:.5; cursor:default; }
+.st-refresh svg { width:14px; height:14px; }
 .st-days { flex:none; font-size:12px; padding:3px 6px; border:1px solid var(--border,#333); border-radius:6px; background:var(--bg-input,transparent); color:inherit; cursor:pointer; }
 .st-filter { flex:none; width:100%; box-sizing:border-box; padding:6px 10px; font-size:13px; border:1px solid var(--border,#333); border-radius:6px; background:var(--bg-input,transparent); color:inherit; }
 .st-filter:focus { outline:1px solid var(--accent,#5b9dff); }
 .st-list { flex:1; min-height:0; overflow-y:auto; display:flex; flex-direction:column; gap:2px; padding-right:2px; }
-.st-sep { flex:none; margin:8px 2px 3px; font-size:11px; letter-spacing:.4px; color:var(--text-dim,#888); user-select:none; }
+.st-sep { flex:none; display:flex; align-items:center; gap:4px; margin:8px 2px 3px; font-size:11px; letter-spacing:.4px; color:var(--text-dim,#888); user-select:none; }
+.st-sep svg { flex:none; color:var(--text-faint,#999); }
 .st-sep:first-child { margin-top:0; }
 .st-row { flex:none; display:flex; align-items:baseline; gap:8px; padding:5px 8px; border-radius:6px; cursor:pointer; }
 .st-row:hover { background:var(--bg-hover,rgba(127,127,127,.12)); }
@@ -305,6 +309,9 @@ const VIEW_CSS = `
 .st-card { width:100%; border:none; cursor:pointer; font:inherit; }
 .st-time { flex:none; white-space:nowrap; margin-left:4px; }
 .st-run { animation:st-breathe 1.8s ease-in-out infinite; }
+/* modal chrome (host-rendered, scoped to our modal via :has) */
+.plugin-modal:has(.st-view) .modal-head { padding-top:24px; }
+.plugin-modal .modal-head-icon.st-patched svg { width:16px; height:16px; }
 `;
 
 // Global listeners registered per mount (window hashchange in section
@@ -348,6 +355,50 @@ function makeChatIcon() {
 	p.setAttribute("d", "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z");
 	svg.appendChild(p);
 	return svg;
+}
+
+/** Generic line-style (lucide) svg builder for the modal chrome patches. */
+function makeLineSvg(cls, children) {
+	const NS = "http://www.w3.org/2000/svg";
+	const svg = document.createElementNS(NS, "svg");
+	svg.setAttribute("viewBox", "0 0 24 24");
+	svg.setAttribute("fill", "none");
+	svg.setAttribute("stroke", "currentColor");
+	svg.setAttribute("stroke-width", "2");
+	svg.setAttribute("stroke-linecap", "round");
+	svg.setAttribute("stroke-linejoin", "round");
+	svg.setAttribute("width", "1em");
+	svg.setAttribute("height", "1em");
+	if (cls) svg.classList.add(cls);
+	for (const [tag, attrs] of children) {
+		const el = document.createElementNS(NS, tag);
+		for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+		svg.appendChild(el);
+	}
+	return svg;
+}
+
+// Same lucide clock the host uses for its own topbar icon (manifest iconSvg).
+function makeClockIcon() {
+	return makeLineSvg("st-line-icon", [
+		["circle", { cx: "12", cy: "12", r: "10" }],
+		["polyline", { points: "12 6 12 12 16 14" }],
+	]);
+}
+
+// Folder path = the host's own 最近项目 project icon.
+function makeFolderIcon() {
+	return makeLineSvg("st-line-icon", [
+		["path", { d: "M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" }],
+	]);
+}
+
+// lucide rotate-cw for the refresh button.
+function makeRefreshIcon() {
+	return makeLineSvg("st-line-icon", [
+		["path", { d: "M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" }],
+		["path", { d: "M21 3v5h-5" }],
+	]);
 }
 
 export default {
@@ -415,8 +466,8 @@ export default {
 			refreshBtn = document.createElement("button");
 			refreshBtn.type = "button";
 			refreshBtn.className = "st-refresh";
-			refreshBtn.textContent = "↻ 刷新";
 			refreshBtn.title = "重新扫描会话文件";
+			refreshBtn.append(makeRefreshIcon());
 			// modal only: period select (180/30/7/1 days; last choice persisted)
 			daysSel = document.createElement("select");
 			daysSel.className = "st-days";
@@ -439,6 +490,16 @@ export default {
 			list.className = "st-list";
 
 			root.append(top, filter, list, status);
+			// The host renders the modal title icon as a text glyph (the
+			// manifest emoji); patch it to the line-style clock so the modal
+			// header matches the topbar button (0.104.4's generic modal has no
+			// iconSvg channel).
+			const headIcon = container.closest(".modal")?.querySelector(".modal-head-icon");
+			if (headIcon) {
+				headIcon.textContent = "";
+				headIcon.classList.add("st-patched");
+				headIcon.append(makeClockIcon());
+			}
 		}
 
 		const clientSessions = () => {
@@ -494,7 +555,8 @@ export default {
 					lastCwd = it.cwd;
 					const sep = document.createElement("div");
 					sep.className = "st-sep";
-					sep.textContent = it.cwdName ? `📁 ${it.cwdName}` : "📁 (未知项目)";
+					// line-style folder, same as the host's 最近项目 rows
+					sep.append(makeFolderIcon(), document.createTextNode(it.cwdName || "(未知项目)"));
 					list.appendChild(sep);
 				}
 				const row = document.createElement("div");

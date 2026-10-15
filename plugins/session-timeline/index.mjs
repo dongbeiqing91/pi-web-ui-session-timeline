@@ -34,6 +34,8 @@ const LIMIT_MIN = 20;
 const LIMIT_MAX = 2000;
 const LIMIT_DEFAULT = 300;
 const TITLE_MAX = 120;
+const DAY_MS = 86_400_000;
+const DAYS_MAX = 365;
 
 function expandTilde(p) {
 	if (p === "~") return homedir();
@@ -162,10 +164,11 @@ function parseSessionCached(filePath, mtime, size) {
 
 /**
  * Scan every project dir under SESSIONS_ROOT.
- * Pass 1: stat all .jsonl files → sort by mtime desc → keep top `limit`.
+ * Pass 1: stat all .jsonl files → sort by mtime desc → (optional) drop
+ * files older than `days` → keep top `limit`.
  * Pass 2: single-pass parse only those (with mtime/size caching).
  */
-function scanAll(limit) {
+function scanAll(limit, days = 0) {
 	const candidates = [];
 	let projectDirs = [];
 	try {
@@ -193,7 +196,9 @@ function scanAll(limit) {
 		}
 	}
 	candidates.sort((a, b) => b.mtime - a.mtime);
-	return candidates.slice(0, limit).map((c) => {
+	const fresh =
+		days > 0 ? candidates.filter((c) => c.mtime >= Date.now() - days * DAY_MS) : candidates;
+	return fresh.slice(0, limit).map((c) => {
 		const parsed = parseSessionCached(c.path, c.mtime, c.size);
 		const stem = basename(c.path).replace(/\.jsonl$/i, "");
 		return {
@@ -213,6 +218,13 @@ function clampLimit(v) {
 	const n = Math.floor(Number(v ?? ""));
 	if (!Number.isFinite(n)) return LIMIT_DEFAULT;
 	return Math.min(LIMIT_MAX, Math.max(LIMIT_MIN, n));
+}
+
+/** Parse ?days=N → 0 (no limit) or 1..DAYS_MAX. */
+function clampDays(v) {
+	const n = Math.floor(Number(v ?? ""));
+	if (!Number.isFinite(n) || n <= 0) return 0;
+	return Math.min(DAYS_MAX, n);
 }
 
 export default {
@@ -237,12 +249,13 @@ export default {
 					limit = clampLimit(s.limit);
 				}
 				const force = q.refresh === "1" || q.refresh === "true";
-				const key = String(limit);
+				const days = clampDays(q.days);
+				const key = `${limit}|${days}`;
 				const now = Date.now();
 				if (force || !cache.sessions || cache.key !== key || now - cache.at > CACHE_TTL_MS) {
-					cache = { key, at: now, sessions: scanAll(limit) };
+					cache = { key, at: now, sessions: scanAll(limit, days) };
 				}
-				res.json({ ok: true, count: cache.sessions.length, sessions: cache.sessions });
+				res.json({ ok: true, count: cache.sessions.length, days, sessions: cache.sessions });
 			} catch (e) {
 				res.status(500).json({ ok: false, error: String(e?.message ?? e) });
 			}

@@ -2,8 +2,8 @@
 
 A [pi-web-ui](https://github.com/xing-shuyin/pi-web-ui) plugin: a **global, cross-project session timeline** — both as a left-sidebar section and a top-bar modal.
 
-- **Left sidebar section "会话时间线"** (below History, collapsible like the native sections, resizable/hideable in 界面布局): a flat card list of your most recent sessions across **every** project (newest first), styled like the native 运行的对话 cards — chat icon, title, project name as the sublabel, time on the right; the currently open session gets the purple "active" highlight; in-progress sessions get the breathing green dot.
-- **Topbar clock button** (line-style icon, matching the other topbar buttons) opens the timeline modal with the original row-list design (filter box + refresh + 当前 badge; on hosts without the left-panel section feature this is the only surface).
+- **Left sidebar section "会话时间线"** (below History, collapsible like the native sections, resizable/hideable in 界面布局): a flat card list of your most recent sessions across **every** project (newest first), styled like the native 运行的对话 cards — chat icon, title, project name as the sublabel, time on the right; the currently open session gets the purple "active" highlight; in-progress sessions get the breathing green dot. **Limited to the last 7 days.** The section title shows the count, e.g. `会话时间线 (35)`.
+- **Topbar clock button** (line-style icon, matching the other topbar buttons) opens the timeline modal with the original row-list design — filter box, **period select (180/30/7/1 天, default 180, last choice remembered in localStorage)**, refresh, 当前 badge (on hosts without the left-panel section feature this is the only surface).
 - Each row shows the session title, project, and relative time ("just now", "37 min ago", "2 days ago").
 - **Click a title to jump to that session.** Same-project sessions open directly; other projects switch the workspace first (through the host's native directory-authorization flow) and then open the session.
 - **Running sessions get a breathing green dot** — but only when they are *actively in progress*: the conversation is streaming right now, or its session file was written to within the last 5 minutes. Conversations that are open in your client but parked (idle for a while) do **not** get the dot.
@@ -50,7 +50,7 @@ Then (re)start the pi-web-ui server (`pi-web-ui server restart`) and open the we
 
 - **Left sidebar → "会话时间线" section** — always-available flat timeline below History, styled like the 运行的对话 card list (title + project sublabel + time on the right). Click the section title to collapse/expand (same as the native sections); the 界面布局 settings page can hide it or reorder it. The body unmounts while collapsed.
 - **Top bar → clock button** opens the timeline modal with the original row-list design (falls back to a full plugin page on hosts without modal support).
-- **Filter box / ↻ Refresh** — modal only (case-insensitive match on title / project / cwd; refresh forces a rescan via `?refresh=1`).
+- **Filter box / period select / ↻ Refresh** — modal only. Filter: case-insensitive match on title / project / cwd. Period: 180 / 30 / 7 / 1 天 (default 180; persisted per browser profile via `localStorage["stModalDays"]`). Refresh: forces a rescan (bypasses the 10 s cache via `?refresh=1`). The left-panel section always uses 7 days (no controls).
 - **Click a card (section) / a title (modal)** — jumps to that session:
   - same project → `sessions.open(path)` directly;
   - other project → `openSession({cwd, newChat:false})` (the host's native "open project" flow, including its directory authorization) → waits for the new project's session list to arrive → `sessions.open(path)`.
@@ -75,7 +75,7 @@ Runs in the pi-web-ui host process; reads the session store with plain `node:fs`
 - **Two-pass scan**: pass 1 stats every `.jsonl` (mtime desc, keep top `limit`); pass 2 parses only those headers.
 - **Title parse** — one sequential pass over the whole file (the same "last rename wins" semantics as the host's own full-file parse; a head+tail window is *not* enough, because active sessions append far more than any fixed tail budget after their last rename). Lines are prefiltered by substring before `JSON.parse`, so a multi-MB file costs ~one read (10–30 ms). Extracted: header (line 1) → `id`/`cwd`, first `user` message → title fallback, last `session_info` → latest name.
 - **Caching**: in-memory scan cache (10 s TTL; the list refreshes on its own) + per-file mtime/size header cache (up to 1024 entries; old sessions are immutable, so steady-state scans cost only `stat`s).
-- HTTP: `GET /plugins-api/session-timeline/list?refresh=1` → `{ok, count, limit, ms, sessions[]}`. `?refresh=1` (used by the ↻ button) bypasses the 10 s scan cache; `ms` is the scan duration for display.
+- HTTP: `GET /plugins-api/session-timeline/list?refresh=1&days=7` → `{ok, count, days, sessions[]}`. `?refresh=1` (used by the ↻ button) bypasses the 10 s scan cache; `?days=N` (1–365) limits to sessions modified within the last N days — applied at the stat pass (no parsing of old files); the scan cache key includes both limit and days.
 
 ### Client (`plugins/session-timeline/client/entry.mjs`)
 

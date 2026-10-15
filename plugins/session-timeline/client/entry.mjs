@@ -25,6 +25,27 @@ const RUNTIME_KEY = "__piSessionTimelineRuntime";
  *  "in progress" dot requires real activity: the conversation is streaming
  *  right now, or its session file was written to within this window. */
 const ACTIVE_WINDOW_MS = 5 * 60_000;
+/** The left-panel section always shows the last 7 days only (hard limit); the modal offers a period select. */
+const SECTION_DAYS = 7;
+const DAYS_OPTIONS = ["180", "30", "7", "1"]; // modal select values, widest first
+const DAYS_DEFAULT = "180";
+const DAYS_KEY = "stModalDays"; // localStorage: last modal period choice
+
+function readDays() {
+	try {
+		const v = localStorage.getItem(DAYS_KEY);
+		return DAYS_OPTIONS.includes(v) ? v : DAYS_DEFAULT;
+	} catch {
+		return DAYS_DEFAULT;
+	}
+}
+function saveDays(v) {
+	try {
+		localStorage.setItem(DAYS_KEY, v);
+	} catch {
+		/* storage unavailable — choice just won't persist */
+	}
+}
 const previous = globalThis[RUNTIME_KEY];
 if (previous?.destroy) {
 	try {
@@ -259,6 +280,7 @@ const VIEW_CSS = `
 .st-top { display:flex; align-items:center; gap:8px; flex:none; }
 .st-top .st-count { color:var(--text-dim,#888); font-size:12px; flex:1; }
 .st-refresh { flex:none; }
+.st-days { flex:none; font-size:12px; padding:3px 6px; border:1px solid var(--border,#333); border-radius:6px; background:var(--bg-input,transparent); color:inherit; cursor:pointer; }
 .st-filter { flex:none; width:100%; box-sizing:border-box; padding:6px 10px; font-size:13px; border:1px solid var(--border,#333); border-radius:6px; background:var(--bg-input,transparent); color:inherit; }
 .st-filter:focus { outline:1px solid var(--accent,#5b9dff); }
 .st-list { flex:1; min-height:0; overflow-y:auto; display:flex; flex-direction:column; gap:2px; padding-right:2px; }
@@ -360,6 +382,7 @@ export default {
 		let list = null;
 		let secList = null;
 		let secCountEl = null;
+		let daysSel = null;
 
 		if (isSection) {
 			secList = document.createElement("div");
@@ -394,7 +417,18 @@ export default {
 			refreshBtn.className = "st-refresh";
 			refreshBtn.textContent = "↻ 刷新";
 			refreshBtn.title = "重新扫描会话文件";
-			top.append(count, refreshBtn);
+			// modal only: period select (180/30/7/1 days; last choice persisted)
+			daysSel = document.createElement("select");
+			daysSel.className = "st-days";
+			for (const v of DAYS_OPTIONS) {
+				const o = document.createElement("option");
+				o.value = v;
+				o.textContent = `${v} 天`;
+				daysSel.appendChild(o);
+			}
+			daysSel.value = readDays();
+			daysSel.title = "只显示最近 N 天内有活动的会话";
+			top.append(count, daysSel, refreshBtn);
 
 			filter = document.createElement("input");
 			filter.className = "st-filter";
@@ -511,7 +545,9 @@ export default {
 				empty.textContent = q ? "没有匹配的会话" : items.length ? "没有匹配的会话" : "未找到任何会话";
 				list.appendChild(empty);
 			}
-			count.textContent = items.length ? `${shown} / ${items.length} 条会话 · 按修改时间由新到旧` : "";
+			count.textContent = items.length
+				? `${shown} / ${items.length} 条会话${getDays() ? ` · 最近 ${getDays()} 天` : ""} · 按修改时间由新到旧`
+				: "";
 		}
 
 		/* ---- left-panel section design (matches 运行的对话 cards) ---- */
@@ -576,14 +612,20 @@ export default {
 
 		const render = () => (isSection ? renderSection() : renderList());
 
+		const getDays = () => (isSection ? SECTION_DAYS : Number(daysSel?.value ?? DAYS_DEFAULT) || 0);
+
 		async function load(force) {
 			if (loading) return;
 			loading = true;
 			if (refreshBtn) refreshBtn.disabled = true;
 			setStatus(status, "扫描会话文件中…");
 			try {
-				const url = `${API_BASE}/list${force ? "?refresh=1" : ""}`;
-				const r = await fetch(url, { credentials: "same-origin" });
+				const params = new URLSearchParams();
+				if (force) params.set("refresh", "1");
+				const days = getDays();
+				if (days) params.set("days", days);
+				const qs = params.toString();
+				const r = await fetch(qs ? `${API_BASE}/list?${qs}` : `${API_BASE}/list`, { credentials: "same-origin" });
 				const data = await r.json().catch(() => null);
 				if (!r.ok || !data || data.ok !== true) throw new Error((data && data.error) || `HTTP ${r.status}`);
 				items = Array.isArray(data.sessions) ? data.sessions : [];
@@ -601,6 +643,12 @@ export default {
 			}
 		}
 
+		if (daysSel) {
+			daysSel.addEventListener("change", () => {
+				saveDays(daysSel.value);
+				void load(); // server cache key includes days → fresh scan
+			});
+		}
 		if (refreshBtn) refreshBtn.addEventListener("click", () => load(true));
 		if (filter) filter.addEventListener("input", renderList);
 		if (isSection) {

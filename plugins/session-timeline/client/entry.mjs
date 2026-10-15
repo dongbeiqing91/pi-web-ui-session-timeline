@@ -242,10 +242,20 @@ if (!registerAction()) {
 }
 
 /* ------------------------------------------------------------------ */
-/* the modal view                                                      */
+/* ------------------------------------------------------------------ */
+/* the timeline view — two surfaces, one data pipeline                 */
+/*                                                                     */
+/* - modal (topbar 🕘): the original design — meta row + filter +      */
+/*   refresh + compact rows.                                           */
+/* - left-panel section: matches the host's 运行的对话 (running        */
+/*   conversations) card design — project groups (.panel-conv-group)   */
+/*   with cards (button.session-item: chat icon + title + sub). Host   */
+/*   class names are reused on purpose so the look (including theme   */
+/*   handling and the active purple highlight) stays identical.        */
 /* ------------------------------------------------------------------ */
 const VIEW_CSS = `
 .st-view { display:flex; flex-direction:column; gap:10px; height:100%; min-height:200px; font-size:13px; padding:2px 12px 6px; }
+.st-view.st-sec { gap:0; height:auto; min-height:0; overflow:visible; }
 .st-top { display:flex; align-items:center; gap:8px; flex:none; }
 .st-top .st-count { color:var(--text-dim,#888); font-size:12px; flex:1; }
 .st-refresh { flex:none; }
@@ -269,7 +279,53 @@ const VIEW_CSS = `
 .st-status { flex:none; font-size:12px; color:var(--text-dim,#888); min-height:14px; display:none; }
 .st-status.err { color:var(--red,#e5534b); }
 .st-empty { padding:24px 8px; text-align:center; color:var(--text-dim,#888); font-size:12px; }
+.st-sec-list { display:flex; flex-direction:column; }
+.st-card { width:100%; border:none; cursor:pointer; font:inherit; }
+.st-run { animation:st-breathe 1.8s ease-in-out infinite; }
 `;
+
+// Global listeners registered per mount (window hashchange in section
+// mode) — torn down when their container leaves the DOM.
+const teardowns = [];
+function registerTeardown(container, fn) {
+	for (let i = teardowns.length - 1; i >= 0; i--) {
+		if (!teardowns[i].container.isConnected) {
+			try {
+				teardowns[i].fn();
+			} catch {
+				/* already gone */
+			}
+			teardowns.splice(i, 1);
+		}
+	}
+	teardowns.push({ container, fn });
+}
+
+/** The session UUID the client has open right now (URL hash #s=<uuid>). */
+function openSessionId() {
+	const h = location.hash || "";
+	if (h.startsWith("#s=")) return h.slice(3).split("&")[0];
+	return null;
+}
+
+/** Chat-bubble icon, same markup as the host's .session-icon (lucide). */
+function makeChatIcon() {
+	const NS = "http://www.w3.org/2000/svg";
+	const svg = document.createElementNS(NS, "svg");
+	svg.setAttribute("viewBox", "0 0 24 24");
+	svg.setAttribute("fill", "none");
+	svg.setAttribute("stroke", "currentColor");
+	svg.setAttribute("stroke-width", "2");
+	svg.setAttribute("stroke-linecap", "round");
+	svg.setAttribute("stroke-linejoin", "round");
+	svg.setAttribute("width", "1em");
+	svg.setAttribute("height", "1em");
+	svg.classList.add("session-icon");
+	const p = document.createElementNS(NS, "path");
+	p.setAttribute("d", "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z");
+	svg.appendChild(p);
+	return svg;
+}
 
 export default {
 	mount(container, _ctx) {
@@ -279,38 +335,57 @@ export default {
 		style.textContent = VIEW_CSS;
 		container.appendChild(style);
 
+		// Left-panel section: the host mounts us into its PluginPage
+		// (.lp-plugin-page). Modal: the container is the modal content div.
+		const isSection = !!(
+			container.classList?.contains("lp-plugin-page") ||
+			container.closest?.(".lp-plugin-page")
+		);
+
 		const root = document.createElement("div");
-		root.className = "st-view";
-
-		const top = document.createElement("div");
-		top.className = "st-top";
-		const count = document.createElement("span");
-		count.className = "st-count";
-		count.textContent = "";
-		const refreshBtn = document.createElement("button");
-		refreshBtn.type = "button";
-		refreshBtn.className = "st-refresh";
-		refreshBtn.textContent = "↻ 刷新";
-		refreshBtn.title = "重新扫描会话文件";
-		top.append(count, refreshBtn);
-
-		const filter = document.createElement("input");
-		filter.className = "st-filter";
-		filter.type = "text";
-		filter.placeholder = "过滤标题 / 项目名…";
-
-		const list = document.createElement("div");
-		list.className = "st-list";
+		root.className = isSection ? "st-view st-sec" : "st-view";
+		container.appendChild(root);
 
 		const status = document.createElement("div");
 		status.className = "st-status";
 
-		root.append(top, filter, list, status);
-		container.appendChild(root);
-
 		let items = [];
 		let loading = false;
 		let closed = false;
+		let refreshBtn = null;
+		let filter = null;
+		let count = null;
+		let list = null;
+		let secList = null;
+
+		if (isSection) {
+			secList = document.createElement("div");
+			secList.className = "st-sec-list";
+			root.append(secList, status);
+		} else {
+			// modal surface: meta row + filter + scrolling list (original design)
+			const top = document.createElement("div");
+			top.className = "st-top";
+			count = document.createElement("span");
+			count.className = "st-count";
+			count.textContent = "";
+			refreshBtn = document.createElement("button");
+			refreshBtn.type = "button";
+			refreshBtn.className = "st-refresh";
+			refreshBtn.textContent = "↻ 刷新";
+			refreshBtn.title = "重新扫描会话文件";
+			top.append(count, refreshBtn);
+
+			filter = document.createElement("input");
+			filter.className = "st-filter";
+			filter.type = "text";
+			filter.placeholder = "过滤标题 / 项目名…";
+
+			list = document.createElement("div");
+			list.className = "st-list";
+
+			root.append(top, filter, list, status);
+		}
 
 		const clientSessions = () => {
 			const b = bridge();
@@ -323,20 +398,13 @@ export default {
 			}
 		};
 
-		function renderList() {
-			list.innerHTML = "";
-			const q = filter.value.trim().toLowerCase();
-			// A session path that is in the client's own sessions.list() belongs to
-			// the current project (history ids are file paths) → opens directly.
-			// Running conversations (kind:"running") carry a client-local conv id
-			// (not the session UUID), so "in progress" is matched by cwd+title.
+		// "In progress" = a running conversation for this row that is either
+		// streaming right now or whose session file was written to within
+		// ACTIVE_WINDOW_MS (open-but-parked conversations do not get the dot).
+		function runningInfo() {
 			const client = clientSessions();
-			const openableIds = new Set(client.map((s) => s.id));
+			const openable = new Set(client.map((s) => s.id));
 			const running = client.filter((s) => s && s.kind === "running" && s.cwd && s.title);
-			// In-progress = a running conversation for this row that is either
-			// streaming right now or whose session file was written to recently
-			// (idle running conversations — open but parked for hours — do not
-			// get the dot).
 			const nowMs = Date.now();
 			const isRunning = (it) =>
 				running.some(
@@ -345,6 +413,17 @@ export default {
 						titleMatches(s.title, it.title) &&
 						(s.isStreaming === true || nowMs - it.mtime <= ACTIVE_WINDOW_MS),
 				);
+			return { openable, isRunning };
+		}
+
+		/* ---- modal design (original: rows with 当前 badge + meta) ---- */
+		function renderList() {
+			list.innerHTML = "";
+			const q = filter.value.trim().toLowerCase();
+			// A session path that is in the client's own sessions.list()
+			// belongs to the current project (history ids are file paths) →
+			// opens directly.
+			const { openable, isRunning } = runningInfo();
 			let lastCwd = null;
 			let shown = 0;
 			for (const it of items) {
@@ -366,7 +445,7 @@ export default {
 				}
 				const row = document.createElement("div");
 				row.className = "st-row";
-				const isCurrent = openableIds.has(it.path);
+				const isCurrent = openable.has(it.path);
 				if (isRunning(it)) {
 					const dot = document.createElement("span");
 					dot.className = "st-dot";
@@ -415,10 +494,88 @@ export default {
 			count.textContent = items.length ? `${shown} / ${items.length} 条会话 · 按修改时间由新到旧` : "";
 		}
 
+		/* ---- left-panel section design (matches 运行的对话 cards) ---- */
+		function makeCard(it, { isRunning, openId }) {
+			const row = document.createElement("div");
+			row.className = "lp-row";
+			const btn = document.createElement("button");
+			btn.type = "button";
+			btn.className = "session-item st-card" + (openId && it.id === openId ? " active" : "");
+			btn.title = `${it.title}\n${it.path}`;
+			const info = document.createElement("span");
+			info.className = "session-info";
+			const title = document.createElement("span");
+			title.className = "session-title";
+			title.textContent = it.title;
+			const sub = document.createElement("span");
+			sub.className = "session-sub";
+			sub.textContent = relTime(it.mtime);
+			info.append(title, sub);
+			btn.append(makeChatIcon(), info);
+			if (isRunning(it)) {
+				const dot = document.createElement("span");
+				dot.className = "conv-streaming st-run";
+				dot.title = "正在进行中（正在生成，或 5 分钟内有活动）";
+				btn.appendChild(dot);
+			}
+			const doJump = () => {
+				if (btn.disabled) return;
+				btn.disabled = true;
+				jumpTo(it, status, () => {
+					if (!closed) renderSection();
+				})
+					.catch(() => {})
+					.finally(() => {
+						if (!closed) btn.disabled = false;
+					});
+			};
+			btn.addEventListener("click", doJump);
+			row.appendChild(btn);
+			return row;
+		}
+
+		function renderSection() {
+			secList.innerHTML = "";
+			const { isRunning } = runningInfo();
+			const openId = openSessionId();
+			// Group by project; projects keep their newest-session order
+			// (items arrive sorted mtime desc → first-seen = most recent).
+			const groups = [];
+			const byCwd = new Map();
+			for (const it of items) {
+				let g = byCwd.get(it.cwd);
+				if (!g) {
+					g = { name: it.cwdName, cwd: it.cwd, list: [] };
+					byCwd.set(it.cwd, g);
+					groups.push(g);
+				}
+				g.list.push(it);
+			}
+			for (const g of groups) {
+				const wrap = document.createElement("div");
+				wrap.className = "panel-conv-group";
+				const gt = document.createElement("div");
+				gt.className = "panel-conv-group-title";
+				gt.textContent = g.name || "(未知项目)";
+				gt.title = g.cwd;
+				wrap.appendChild(gt);
+				for (const it of g.list) wrap.appendChild(makeCard(it, { isRunning, openId }));
+				secList.appendChild(wrap);
+			}
+			if (!items.length) {
+				const empty = document.createElement("div");
+				empty.className = "st-empty";
+				empty.textContent = "未找到任何会话";
+				secList.appendChild(empty);
+			}
+		}
+
+		const render = () => (isSection ? renderSection() : renderList());
+
 		async function load(force) {
 			if (loading) return;
 			loading = true;
-			refreshBtn.disabled = true;
+			if (refreshBtn) refreshBtn.disabled = true;
 			setStatus(status, "扫描会话文件中…");
 			try {
 				const url = `${API_BASE}/list${force ? "?refresh=1" : ""}`;
@@ -426,27 +583,46 @@ export default {
 				const data = await r.json().catch(() => null);
 				if (!r.ok || !data || data.ok !== true) throw new Error((data && data.error) || `HTTP ${r.status}`);
 				items = Array.isArray(data.sessions) ? data.sessions : [];
-				renderList();
+				render();
 				setStatus(status, items.length ? "" : "会话目录为空");
 			} catch (e) {
 				items = [];
-				renderList();
+				render();
 				status.classList.add("err");
 				setStatus(status, `加载失败：${e.message ?? e}`);
 			} finally {
 				loading = false;
-				refreshBtn.disabled = false;
+				if (refreshBtn) refreshBtn.disabled = false;
 			}
 		}
 
-		refreshBtn.addEventListener("click", () => load(true));
-		filter.addEventListener("input", renderList);
+		if (refreshBtn) refreshBtn.addEventListener("click", () => load(true));
+		if (filter) filter.addEventListener("input", renderList);
+		if (isSection) {
+			// Keep the active-card highlight in sync with the session the
+			// user opens from anywhere (history list, running list, …).
+			const onHash = () => {
+				if (container.isConnected) renderSection();
+			};
+			window.addEventListener("hashchange", onHash);
+			registerTeardown(container, () => window.removeEventListener("hashchange", onHash));
+		}
 		void load();
 	},
 
 	cleanup() {
-		// The modal container is removed by the host; event listeners live on
-		// its children and are garbage-collected with it. Nothing global to
-		// tear down here (the onUiAction registration is module-level).
+		// The host tears a surface down (modal close / section collapse).
+		// Drop global listeners whose container left the DOM; registerTeardown
+		// self-heals the same set on the next mount for ordering edge cases.
+		for (let i = teardowns.length - 1; i >= 0; i--) {
+			if (!teardowns[i].container.isConnected) {
+				try {
+					teardowns[i].fn();
+				} catch {
+					/* already removed */
+				}
+				teardowns.splice(i, 1);
+			}
+		}
 	},
 };

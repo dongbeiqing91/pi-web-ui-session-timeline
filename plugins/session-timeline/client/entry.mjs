@@ -281,6 +281,7 @@ const VIEW_CSS = `
 .st-empty { padding:24px 8px; text-align:center; color:var(--text-dim,#888); font-size:12px; }
 .st-sec-list { display:flex; flex-direction:column; }
 .st-card { width:100%; border:none; cursor:pointer; font:inherit; }
+.st-time { flex:none; white-space:nowrap; margin-left:4px; }
 .st-run { animation:st-breathe 1.8s ease-in-out infinite; }
 `;
 
@@ -501,17 +502,22 @@ export default {
 			const btn = document.createElement("button");
 			btn.type = "button";
 			btn.className = "session-item st-card" + (openId && it.id === openId ? " active" : "");
-			btn.title = `${it.title}\n${it.path}`;
+			btn.title = `${it.title}\n${it.cwdName || it.cwd}\n${relTime(it.mtime)}\n${it.path}`;
 			const info = document.createElement("span");
 			info.className = "session-info";
 			const title = document.createElement("span");
 			title.className = "session-title";
 			title.textContent = it.title;
+			// sublabel = project name (like 运行的对话's elsewhere cards)
 			const sub = document.createElement("span");
 			sub.className = "session-sub";
-			sub.textContent = relTime(it.mtime);
+			sub.textContent = it.cwdName || "(未知项目)";
 			info.append(title, sub);
-			btn.append(makeChatIcon(), info);
+			// time on the right (session-info's flex:1 pushes it over)
+			const time = document.createElement("span");
+			time.className = "session-sub st-time";
+			time.textContent = relTime(it.mtime);
+			btn.append(makeChatIcon(), info, time);
 			if (isRunning(it)) {
 				const dot = document.createElement("span");
 				dot.className = "conv-streaming st-run";
@@ -538,30 +544,8 @@ export default {
 			secList.innerHTML = "";
 			const { isRunning } = runningInfo();
 			const openId = openSessionId();
-			// Group by project; projects keep their newest-session order
-			// (items arrive sorted mtime desc → first-seen = most recent).
-			const groups = [];
-			const byCwd = new Map();
-			for (const it of items) {
-				let g = byCwd.get(it.cwd);
-				if (!g) {
-					g = { name: it.cwdName, cwd: it.cwd, list: [] };
-					byCwd.set(it.cwd, g);
-					groups.push(g);
-				}
-				g.list.push(it);
-			}
-			for (const g of groups) {
-				const wrap = document.createElement("div");
-				wrap.className = "panel-conv-group";
-				const gt = document.createElement("div");
-				gt.className = "panel-conv-group-title";
-				gt.textContent = g.name || "(未知项目)";
-				gt.title = g.cwd;
-				wrap.appendChild(gt);
-				for (const it of g.list) wrap.appendChild(makeCard(it, { isRunning, openId }));
-				secList.appendChild(wrap);
-			}
+			// Flat card list, newest first (no project grouping).
+			for (const it of items) secList.appendChild(makeCard(it, { isRunning, openId }));
 			if (!items.length) {
 				const empty = document.createElement("div");
 				empty.className = "st-empty";

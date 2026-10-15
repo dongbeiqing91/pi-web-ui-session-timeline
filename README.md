@@ -3,7 +3,7 @@
 A [pi-web-ui](https://github.com/xing-shuyin/pi-web-ui) plugin: a **global, cross-project session timeline** — both as a left-sidebar section and a top-bar modal.
 
 - **Left sidebar section "会话时间线"** (below History, collapsible like the native sections, resizable/hideable in 界面布局): a flat card list of your most recent sessions across **every** project (newest first), styled like the native 运行的对话 cards — chat icon, title, project name as the sublabel, time on the right; the currently open session gets the purple "active" highlight; in-progress sessions get the breathing green dot.
-- **Top-bar 🕘 button** opens the timeline as a modal with the original row-list design (filter box + refresh + 当前 badge; on hosts without the left-panel section feature this is the only surface).
+- **Topbar clock button** (line-style icon, matching the other topbar buttons) opens the timeline modal with the original row-list design (filter box + refresh + 当前 badge; on hosts without the left-panel section feature this is the only surface).
 - Each row shows the session title, project, and relative time ("just now", "37 min ago", "2 days ago").
 - **Click a title to jump to that session.** Same-project sessions open directly; other projects switch the workspace first (through the host's native directory-authorization flow) and then open the session.
 - **Running sessions get a breathing green dot** — but only when they are *actively in progress*: the conversation is streaming right now, or its session file was written to within the last 5 minutes. Conversations that are open in your client but parked (idle for a while) do **not** get the dot.
@@ -49,7 +49,7 @@ Then (re)start the pi-web-ui server (`pi-web-ui server restart`) and open the we
 ## Usage
 
 - **Left sidebar → "会话时间线" section** — always-available flat timeline below History, styled like the 运行的对话 card list (title + project sublabel + time on the right). Click the section title to collapse/expand (same as the native sections); the 界面布局 settings page can hide it or reorder it. The body unmounts while collapsed.
-- **Top bar → 🕘** opens the timeline modal with the original row-list design (falls back to a full plugin page on hosts without modal support).
+- **Top bar → clock button** opens the timeline modal with the original row-list design (falls back to a full plugin page on hosts without modal support).
 - **Filter box / ↻ Refresh** — modal only (case-insensitive match on title / project / cwd; refresh forces a rescan via `?refresh=1`).
 - **Click a card (section) / a title (modal)** — jumps to that session:
   - same project → `sessions.open(path)` directly;

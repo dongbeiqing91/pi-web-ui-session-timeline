@@ -5,8 +5,8 @@
 	"version": "0.1.0",
 	"icon": "🕘",
 	"apiVersion": 2,
-	"description": "顶栏 🕘 按钮弹出跨项目的会话时间线：扫描 pi 会话目录下所有项目的历史会话，按修改时间由新到旧排列（带项目分组），点会话标题即可跳转——跨项目会话先自动切换工作区（走宿主原生目录授权确认）。",
-	"descriptionEn": "A topbar 🕘 button opens a cross-project session timeline: scans every project's history sessions under the pi sessions dir, lists them newest first (grouped by project), and clicking a title jumps to it — cross-project entries switch the workspace first (with the host's native directory-authorization confirm).",
+	"description": "顶栏时钟按钮弹出跨项目的会话时间线：扫描 pi 会话目录下所有项目的历史会话，按修改时间由新到旧排列（带项目分组），点会话标题即可跳转——跨项目会话先自动切换工作区（走宿主原生目录授权确认）。左栏另有可折叠的「会话时间线」分区（卡片样式，同「运行的对话」）。",
+	"descriptionEn": "A topbar clock button opens a cross-project session timeline: scans every project's history sessions under the pi sessions dir, lists them newest first (grouped by project), and clicking a title jumps to it — cross-project entries switch the workspace first (with the host's native directory-authorization confirm). The left sidebar also gets a collapsible Session Timeline section (cards styled like the running-chats section).",
 	"view": true,
 	"permissions": ["ui", "fs", "http"],
 	"settings": [
@@ -29,6 +29,7 @@
 				"label": "会话时间线",
 				"labelEn": "Session Timeline",
 				"icon": "🕘",
+				"iconSvg": "<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><circle cx='12' cy='12' r='10'></circle><polyline points='12 6 12 12 16 14'></polyline></svg>",
 				"kind": "action",
 				"action": "session-timeline:open",
 				"align": "end",

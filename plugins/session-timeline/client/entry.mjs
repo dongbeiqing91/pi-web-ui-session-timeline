@@ -105,9 +105,10 @@ function setStatus(el, text) {
 
 /**
  * Jump to a session (item from /list). `statusEl` gets human-readable
- * progress / error text.
+ * progress / error text. `onSettled` (optional) fires after the attempt
+ * finishes so the caller can re-render (badges / running dots).
  */
-async function jumpTo(item, statusEl) {
+async function jumpTo(item, statusEl, onSettled) {
 	const b = bridge();
 	if (!b) {
 		setStatus(statusEl, "宿主桥不可用（页面可能尚未加载完），稍后重试");
@@ -117,13 +118,36 @@ async function jumpTo(item, statusEl) {
 		setStatus(statusEl, "当前宿主版本过低（需要插件 API v6+ 的 sessions 接口）");
 		return;
 	}
-setStatus(statusEl, `正在跳转到「${item.title}」…`);
+	const settle = () => {
+		try {
+			if (typeof onSettled === "function") onSettled();
+		} catch {
+			/* cosmetic only */
+		}
+	};
+	const landed = () => !!(item.id && location.hash && location.hash.includes("#s=" + item.id));
+	const done = (msg) => {
+		setStatus(statusEl, msg);
+		settle();
+		setTimeout(() => {
+			if (typeof b.closeModal === "function") b.closeModal(); // no-op when the section (not a modal) triggered the jump
+		}, 250);
+	};
+	setStatus(statusEl, `正在跳转到「${item.title}」…`);
 	try {
 		// Fast path: the session is already in this client's list (current
 		// project's history, or any running conversation) → open directly.
-		let r2 = await b.sessions.open(item.path);
-		if (!r2 || r2.ok !== true) {
-			if (!item.cwd) throw new Error((r2 && r2.error) || "打开会话失败");
+		let r = await b.sessions.open(item.path);
+		let err = r && r.ok !== true ? r.error || "打开会话失败" : null;
+		// Heavy sessions: the host's open() confirmation can time out while
+		// the switch itself is still completing. The active-session URL hash
+		// is the ground truth — verify instead of declaring failure.
+		if (err && /超时/.test(err) && await waitFor(landed, 8000)) {
+			done("已跳转 ✓（会话较大，加载稍慢）");
+			return;
+		}
+		if (err && !item.cwd) throw new Error(err);
+		if (err) {
 			// Slow path (cross-project): switch workspace first. Unknown
 			// projects pop the host's native dir-authorization confirm;
 			// refusal fails fast. (The public bridge has no getCwd, so we
@@ -143,16 +167,18 @@ setStatus(statusEl, `正在跳转到「${item.title}」…`);
 			if (!listed) {
 				throw new Error("会话不在目标项目的可见列表中（可能超出左栏 200 条上限，请改用左栏「历史对话」打开）");
 			}
-			r2 = await b.sessions.open(item.path);
-			if (!r2 || r2.ok !== true) throw new Error((r2 && r2.error) || "打开会话失败");
+			r = await b.sessions.open(item.path);
+			err = r && r.ok !== true ? r.error || "打开会话失败" : null;
+			if (err && /超时/.test(err) && await waitFor(landed, 8000)) {
+				done("已跳转 ✓（会话较大，加载稍慢）");
+				return;
+			}
+			if (err) throw new Error(err);
 		}
-		// Give the switch a beat to visually land, then close the modal.
-		setStatus(statusEl, "已跳转 ✓");
-		setTimeout(() => {
-			if (typeof b.closeModal === "function") b.closeModal();
-		}, 250);
+		done("已跳转 ✓");
 	} catch (e) {
 		setStatus(statusEl, `跳转失败：${e.message ?? e}`);
+		settle();
 	}
 }
 
@@ -364,7 +390,9 @@ export default {
 				const doJump = () => {
 					if (titleBtn.disabled) return;
 					titleBtn.disabled = true;
-					jumpTo(it, status)
+					jumpTo(it, status, () => {
+						if (!closed) renderList(); // refresh 当前 badge / running dots after the jump
+					})
 						.catch(() => {})
 						.finally(() => {
 							if (!closed) titleBtn.disabled = false;

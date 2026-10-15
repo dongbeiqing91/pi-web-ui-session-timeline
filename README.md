@@ -1,8 +1,9 @@
 # pi-web-ui session-timeline
 
-A [pi-web-ui](https://github.com/xing-shuyin/pi-web-ui) plugin: a **global, cross-project session timeline** in the top bar.
+A [pi-web-ui](https://github.com/xing-shuyin/pi-web-ui) plugin: a **global, cross-project session timeline** — both as a left-sidebar section and a top-bar modal.
 
-- The 🕘 button opens a modal listing your most recent sessions across **every** project (sorted by modification time, newest first).
+- **Left sidebar section "会话时间线"** (below History, collapsible like the native sections, resizable/hideable in 界面布局): lists your most recent sessions across **every** project (newest first), grouped by project.
+- **Top-bar 🕘 button** opens the same list as a modal (on hosts without the left-panel section feature).
 - Each row shows the session title, project, and relative time ("just now", "37 min ago", "2 days ago").
 - **Click a title to jump to that session.** Same-project sessions open directly; other projects switch the workspace first (through the host's native directory-authorization flow) and then open the session.
 - **Running sessions get a breathing green dot** — but only when they are *actively in progress*: the conversation is streaming right now, or its session file was written to within the last 5 minutes. Conversations that are open in your client but parked (idle for a while) do **not** get the dot.
@@ -47,13 +48,15 @@ Then (re)start the pi-web-ui server (`pi-web-ui server restart`) and open the we
 
 ## Usage
 
-- **Top bar → 🕘** opens the timeline modal (falls back to a full plugin page on hosts without modal support).
+- **Left sidebar → "会话时间线" section** — always-available timeline below History. Click the section title to collapse/expand (same as the native sections); the 界面布局 settings page can hide it or reorder it. The body unmounts while collapsed.
+- **Top bar → 🕘** opens the same list as a modal (falls back to a full plugin page on hosts without modal support).
 - **Filter box** — case-insensitive match on title / project name / cwd.
-- **↻ Refresh** — forces a rescan (bypasses the 10 s cache).
+- **↻ Refresh** — forces a rescan (bypasses the 10 s cache via `?refresh=1`).
 - **Click a row** — jumps to that session:
   - same project → `sessions.open(path)` directly;
   - other project → `openSession({cwd, newChat:false})` (the host's native "open project" flow, including its directory authorization) → waits for the new project's session list to arrive → `sessions.open(path)`.
-- **Esc / backdrop / ✕** closes the modal.
+  - **Heavy sessions**: the host's `sessions.open()` can report "切换会话超时" while the switch is actually still completing; the plugin then verifies via the active-session URL hash (`#s=<session-uuid>`) and reports success once it lands ("已跳转 ✓（会话较大，加载稍慢）") instead of a false failure.
+- **Esc / backdrop / ✕** closes the modal (the section, of course, stays).
 
 ## Settings
 
@@ -78,10 +81,23 @@ Runs in the pi-web-ui host process; reads the session store with plain `node:fs`
 ### Client (`plugins/session-timeline/client/entry.mjs`)
 
 - The top-bar action handler (`onUiAction`) is registered at **module top level**, because the host lazy-loads the bundle on first click and dispatches the action ~1.5 s later (contract observed from the bundled `feature-board` plugin).
+- **Left sidebar section** — the manifest also contributes a `leftpanel.sections` entry:
+
+```json
+{
+  "id": "timeline-section",
+  "slot": "leftpanel.sections",
+  "label": "会话时间线",
+  "kind": "view",
+  "order": 40
+}
+```
+
+This is the host's P4 "plugin custom left-panel section": `kind:"view"` entries in `leftpanel.sections` render a native collapsible section (same header/collapse/weight-drag as 最近项目/运行的对话/历史对话); the body is mounted from the plugin's client bundle via the host's `PluginPage` — the same `mount(container)`/`cleanup()` default export the modal uses (one view, two surfaces). Collapsing unmounts the body. `order: 40` places it after History (host entries: projects 10, running 20, history 30); the 界面布局 page can hide or reorder it. Note: the host's own docs still describe this slot as host-only — the code (verified in 0.104.4) accepts plugin `view` entries.
 - Modal via `openModal("session-timeline:timeline")`; if it returns `false` (older host), falls back to the full plugin view (`setView`).
 - DOM is built with `createElement`/`textContent`/`createTextNode` only — no unescaped `innerHTML` interpolation (pi-lens lint).
-- Jump flow (see Usage). The fast path tries `sessions.open(path)` first — for the *current* project this opens immediately. Only on failure (and when the row carries a `cwd`) does the cross-project `openSession` path run, polling `sessions.list()` for up to 10 s for the target to appear in the new project's list.
-- The "current · " badge marks sessions that are in the current project's native list (i.e. openable directly right now).
+- Jump flow (see Usage). The fast path tries `sessions.open(path)` first — for the *current* project this opens immediately. Only on failure (and when the row carries a `cwd`) does the cross-project `openSession` path run, polling `sessions.list()` for up to 10 s for the target to appear in the new project's list. If `sessions.open()` fails with a *timeout* on a heavy session (the host's confirmation window expires while the switch is still landing), the plugin verifies via the active-session URL hash (`#s=<session-uuid>`) for up to 8 s and reports success once it lands.
+- The "current · " badge marks sessions that are in the current project's native list (i.e. openable directly right now); the list re-renders after each jump so badges and running-dots stay accurate.
 - **Running-session dot**: `sessions.list()` entries with `kind:"running"` are the conversations open in *this* browser client — note this includes **parked** conversations (opened, then idle for hours; pi-web-ui keeps them in the list until closed). Their `id` is a client-local conv id (not the session UUID), so rows are matched by `cwd` + title (prefix-safe, since the timeline truncates titles at 120 chars). The dot only renders when the match is also *active*: `isStreaming === true` or the row's file mtime is within the last 5 minutes (`ACTIVE_WINDOW_MS`). Matched rows get an 8 px green dot with a 1.8 s breathing animation (scale + opacity + fading glow).
 
 ## Files

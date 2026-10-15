@@ -45,6 +45,18 @@
 				"icon": "🕘",
 				"kind": "view"
 			}
+		],
+		"leftpanel.sections": [
+			{
+				"id": "timeline-section",
+				"label": "会话时间线",
+				"labelEn": "Session Timeline",
+				"icon": "🕘",
+				"kind": "view",
+				"order": 40,
+				"hint": "跨项目会话时间线分区（可折叠，排在「历史对话」之后）",
+				"hintEn": "Cross-project timeline section (collapsible, after the History section)"
+			}
 		]
 	}
 }

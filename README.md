@@ -48,7 +48,7 @@ Then (re)start the pi-web-ui server (`pi-web-ui server restart`) and open the we
 
 ## Usage
 
-- **Left sidebar → "会话时间线" section** — always-available flat timeline below History, styled like the 运行的对话 card list (title + project sublabel + time on the right). Click the section title to collapse/expand (same as the native sections); the 界面布局 settings page can hide it or reorder it. The body unmounts while collapsed.
+- **Left sidebar → "会话时间线" section** — always-available flat timeline below History, styled like the 运行的对话 card list (title + project sublabel + time on the right). **Auto-refreshes**: both surfaces refetch on their own every ~30 s while the tab is visible and not covered by a modal (a new or updated session file shows up within ~40 s, no manual action). Click the section title to collapse/expand (same as the native sections); the 界面布局 settings page can hide it or reorder it. The body unmounts while collapsed.
 - **Top bar → clock button** opens the timeline modal with the original row-list design (falls back to a full plugin page on hosts without modal support).
 - **Filter box / period select / ↻ Refresh** — modal only. Filter: case-insensitive match on title / project / cwd. Period: 180 / 30 / 7 / 1 天 (default 180; persisted per browser profile via `localStorage["stModalDays"]`). Refresh: forces a rescan (bypasses the 10 s cache via `?refresh=1`). The left-panel section always uses 7 days (no controls).
 - **Click a card (section) / a title (modal)** — jumps to that session:

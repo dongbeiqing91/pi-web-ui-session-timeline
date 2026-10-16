@@ -427,6 +427,7 @@ export default {
 		let loading = false;
 		let haveData = false;
 		let closed = false;
+		let lastFetch = 0; // for the auto-reload cadence
 		let refreshBtn = null;
 		let filter = null;
 		let count = null;
@@ -692,6 +693,7 @@ export default {
 				if (!r.ok || !data || data.ok !== true) throw new Error((data && data.error) || `HTTP ${r.status}`);
 				items = Array.isArray(data.sessions) ? data.sessions : [];
 				haveData = true;
+				lastFetch = Date.now();
 				render();
 				setStatus(status, items.length ? "" : "会话目录为空");
 			} catch (e) {
@@ -722,6 +724,22 @@ export default {
 			window.addEventListener("hashchange", onHash);
 			registerTeardown(container, () => window.removeEventListener("hashchange", onHash));
 		}
+		// Auto-reload (both surfaces): poll every 8s, refetch at most once per
+		// 30s, and only while the tab is visible, our surface is attached and
+		// not covered by a modal. The server's 10s scan cache makes the plain
+		// (non-forced) load cheap and fresh enough.
+		const maybeAutoReload = () => {
+			if (document.visibilityState !== "visible") return;
+			if (document.querySelector(".modal")) return;
+			if (!container.isConnected || container.offsetParent === null) return;
+			if (Date.now() - lastFetch < 30_000) return;
+			void load();
+		};
+		const autoTimer = setInterval(maybeAutoReload, 8_000);
+		registerTeardown(container, () => {
+			clearInterval(autoTimer);
+			closed = true;
+		});
 		void load();
 	},
 

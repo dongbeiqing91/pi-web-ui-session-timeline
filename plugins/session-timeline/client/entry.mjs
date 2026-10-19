@@ -126,8 +126,9 @@ function setStatus(el, text) {
 
 /**
  * Jump to a session (item from /list). `statusEl` gets human-readable
- * progress / error text. `onSettled` (optional) fires after the attempt
- * finishes so the caller can re-render (badges / running dots).
+ * progress / error text. `onSettled(ok)` (optional) fires after the attempt
+ * finishes with a success flag so the caller can re-render (badges / running
+ * dots) or wait for the deep-link hash to land on the target.
  */
 async function jumpTo(item, statusEl, onSettled) {
 	const b = bridge();
@@ -139,9 +140,9 @@ async function jumpTo(item, statusEl, onSettled) {
 		setStatus(statusEl, "当前宿主版本过低（需要插件 API v6+ 的 sessions 接口）");
 		return;
 	}
-	const settle = () => {
+	const settle = (ok = true) => {
 		try {
-			if (typeof onSettled === "function") onSettled();
+			if (typeof onSettled === "function") onSettled(ok);
 		} catch {
 			/* cosmetic only */
 		}
@@ -199,7 +200,7 @@ async function jumpTo(item, statusEl, onSettled) {
 		done("已跳转 ✓");
 	} catch (e) {
 		setStatus(statusEl, `跳转失败：${e.message ?? e}`);
-		settle();
+		settle(false);
 	}
 }
 
@@ -314,8 +315,9 @@ const VIEW_CSS = `
 .plugin-modal .modal-head-icon.st-patched svg { width:16px; height:16px; }
 `;
 
-// Global listeners registered per mount (window hashchange in section
-// mode) — torn down when their container leaves the DOM.
+// Global listeners registered per mount (window hashchange + a 1s
+// active-session poll in section mode) — torn down when their container
+// leaves the DOM.
 const teardowns = [];
 function registerTeardown(container, fn) {
 	for (let i = teardowns.length - 1; i >= 0; i--) {
@@ -645,8 +647,19 @@ export default {
 			const doJump = () => {
 				if (btn.disabled) return;
 				btn.disabled = true;
-				jumpTo(it, status, () => {
-					if (!closed) renderSection();
+				jumpTo(it, status, (ok) => {
+					if (closed) return;
+					if (!ok) {
+						renderSection(); // resync highlight with whatever is actually open
+						return;
+					}
+					// sessions.open() resolves a beat before the host writes the new
+					// #s=<uuid> hash (React effect → history.replaceState, no
+					// hashchange). Wait for the hash to land so the clicked card
+					// highlights immediately instead of on the next poll tick.
+					void waitFor(() => openSessionId() === it.id, 3_000).then(() => {
+						if (!closed) renderSection();
+					});
 				})
 					.catch(() => {})
 					.finally(() => {
@@ -717,12 +730,26 @@ export default {
 		if (filter) filter.addEventListener("input", renderList);
 		if (isSection) {
 			// Keep the active-card highlight in sync with the session the
-			// user opens from anywhere (history list, running list, …).
-			const onHash = () => {
+			// user opens from anywhere (history list, running list, our cards,
+			// back/forward). The host rewrites the #s=<uuid> deep-link hash
+			// with history.replaceState() on programmatic switches — that fires
+			// NEITHER hashchange NOR popstate — so a listener alone misses almost
+			// every real switch. Poll the open-session id (a cheap string
+			// compare) and re-render only when it changes; keep the hashchange
+			// listener for manual URL edits.
+			let lastActiveId = openSessionId();
+			const syncActiveId = () => {
+				const id = openSessionId();
+				if (id === lastActiveId) return;
+				lastActiveId = id;
 				if (container.isConnected) renderSection();
 			};
-			window.addEventListener("hashchange", onHash);
-			registerTeardown(container, () => window.removeEventListener("hashchange", onHash));
+			window.addEventListener("hashchange", syncActiveId);
+			const activeTimer = setInterval(syncActiveId, 1_000);
+			registerTeardown(container, () => {
+				window.removeEventListener("hashchange", syncActiveId);
+				clearInterval(activeTimer);
+			});
 		}
 		// Auto-reload (both surfaces): poll every 8s, refetch at most once per
 		// 30s, and only while the tab is visible, our surface is attached and
